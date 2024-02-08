@@ -1,0 +1,705 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+Library packages needed, you may need to add additional packages if you are doing different parameters. Google is a good resource to find packages that may work best for your question of interest.
+
+If you do not load libraries every time then the proceeding chunks will or may not work. It is likely you will not need all of them but it doesn't hurt to run all in case they need to be used later
+```{r}
+library(ggplot2) #needed for graphical plots
+library(ggpubr)
+library(tidyverse) #helps organize datasets
+library(dplyr)
+library(expss)
+library(car)
+library(lattice)
+library(gtsummary)
+library(readxl) #allows you to read in excel spreadsheets
+library(multcomp) #multiple comparison package
+```
+
+#set working directory and load data set#
+
+This helps the program (R) determine which folder you are working in and you don't have to type the pathway in every time you want to see the data set. Set working directory (folder). Read in your data file by using quotations to designate a name as this corrects for spacing issues. If you run into errors determine what type of data file you have (e.g. .txt, .csv, .PDF) and be sure you have "file name.file type" and the correct function to read that file type e.g (read_csv for csv files, read_txt for txt files, etc) optional: To search for your correct directory faster type in the first folder and hit tab and select the folder you want. Then hit tab again to see what is in that folder as well.)
+
+Be sure your data is cleaned up prior to importing. All names match that need to and there isn't a typo or capitalization or period where it shouldn't be.
+
+The small arrow assigns the file a new call name, this can be anything you want, as long as nothing else has this name already as this will overwrite the old value with the new one. To see what name corresponds with what, just type in the name and hit enter.
+
+```{r}
+setwd("C:/Users/agrebinoski/OneDrive - University of Iowa/SubQ_PCB52/")
+df <- read.csv("PCB_52_tis_levels.csv")
+```
+
+
+```{r}
+ex_data<- read_xlsx("Necropsy_weights.xlsx")
+weights<-ex_data[1:24,c(1,4,5,6,8)]
+info<-ex_data[1:24,c(1,4,5)]
+info<-info[
+  with(info, order(info$`Necropsy ID#`)),
+]
+
+df<-df[
+  with(df, order(df$tissue_id)),
+]
+weights
+weights$adj_brn<-weights$`Brain (g)`/weights$`Body Weight (g)`
+```
+
+```{r}
+m3 <-merge(info, df, by.x = "Necropsy ID#", by.y = "tissue_id", all.y = TRUE)
+m3
+```
+
+
+```{r}
+m3$adj_52<-m3$PCB52/m3$PCB77
+m3$adj_4OH<-m3$X4.PCB52/m3$X4_159
+m3$adj_X1<-m3$X1/m3$X4_159
+```
+
+Following that adjustment we need to account for tissue weight extracted. This will give us levels of ng/g
+```{r}
+m3$tissue.weight..g.<-as.numeric(m3$tissue.weight..g.)
+m3$tisadj_52<-m3$adj_52/m3$tissue.weight..g.
+m3$tisadj_4OH<-m3$adj_4OH/m3$tissue.weight..g.
+m3$tisadj_X1<-m3$adj_X1/m3$tissue.weight..g.
+```
+
+
+#Determine K value or Critical Value for EPA LOD calculation#
+All you need to change is your p if you want a different confidence level. As inserting the name of your data frame. Same as what you called it above. Lower.tail is false to designate a one-tailed t test with positive values
+
+```{r}
+# this generates a function todetermine critical values with 99% confidence and n-1 degrees of freedom for one-tailed t-test for specific data sets (x) indicates the dataset
+
+CV<-function(x) {
+       qt(p=.01, df= nrow(x)- 1, lower.tail=FALSE) 
+} 
+
+#we will then be able to put the CV equation into the MDL or LOD calculation without having to generate a new CV every time
+```
+
+#MDL function for methods#
+In the function generated below all you need to do is replace your data frame name where needed. mean_col= generates the mean for the column; CV is the critical value we just calculated for your data set above and sd_col= generates the standard deviation for the column. na.rm is false to leave any remaining NA values that may still be in the data frame in the data frame. They should not affect your LOD calculations. 
+
+```{r}
+#This is setting up the EPA LOD equation as a new function called LOD_equation
+MDL_equation<- function(x) {
+        mean_col(x, na.rm = TRUE) + CV(x)*sd_col(x, na.rm= TRUE) 
+        } 
+```
+
+```{r}
+method_blanks<- m3[grep("_B", m3$batch_id) ,]
+adj_df <-method_blanks[12:14]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+adj_df <- as.data.frame(apply(adj_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+adj_df[is.na(adj_df)] <- 0.00001
+```
+
+```{r}
+#applying the equation to data that will be formatted as a data frame for further analysis
+MDL <-as.data.frame(MDL_equation(adj_df))
+```
+
+
+#tissue LOD [ng]
+```{r}
+
+ctrl_df <- m3[grep("Sham", m3$Exposure) ,]
+LOD_equation<- function(x) {
+        mean_col(x, na.rm = TRUE) + CV(x)*sd_col(x, na.rm= TRUE) 
+        } 
+```
+
+
+
+*brain*
+```{r}
+brn_df <- ctrl_df[grep("Brn", ctrl_df$batch_id) ,12:14]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+brn_df <- as.data.frame(apply(brn_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+brn_df[is.na(brn_df)] <- 0.000001
+brn_LOD_ng <-as.data.frame(LOD_equation(brn_df))
+
+#lets now format those LODs into a dataframe for use and add a column header
+names(brn_LOD_ng)[1] <- "brn_LOD_ng"
+```
+
+*serum*
+```{r}
+ser_df <- ctrl_df[grep("S", ctrl_df$batch_id) ,12:14]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+ser_df <- as.data.frame(apply(ser_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+ser_df[is.na(ser_df)] <- 0.000001
+ser_LOD_ng <-as.data.frame(LOD_equation(ser_df))
+
+#lets now format those LODs into a dataframe for use and add a column header
+names(ser_LOD_ng)[1] <- "ser_LOD_ng"
+```
+
+*Liver*
+```{r}
+Liv_df <- ctrl_df[grep("Liv", ctrl_df$batch_id) ,12:14]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+Liv_df <- as.data.frame(apply(Liv_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+Liv_df[is.na(Liv_df)] <- 0.000001
+Liv_LOD_ng <-as.data.frame(LOD_equation(Liv_df))
+
+#lets now format those LODs into a dataframe for use and add a column header
+names(Liv_LOD_ng)[1] <- "liv_LOD_ng"
+```
+
+*Lung*
+```{r}
+Lng_df <- ctrl_df[grep("Lng", ctrl_df$batch_id) ,12:14]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+Lng_df <- as.data.frame(apply(Lng_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+Lng_df[is.na(Lng_df)] <- 0.000001
+Lng_LOD_ng <-as.data.frame(LOD_equation(Lng_df))
+
+#lets now format those LODs into a dataframe for use and add a column header
+names(Lng_LOD_ng)[1] <- "lng_LOD_ng"
+```
+
+
+***Tissue Specific LOD Applications ng/g***
+We can now conduct similar calculations to determine the Limit of Detection for each analyte in specific tissues.
+
+
+*brain*
+```{r}
+brn_df <- ctrl_df[grep("Brn", ctrl_df$batch_id) ,15:17]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+brn_df <- as.data.frame(apply(brn_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+brn_df[is.na(brn_df)] <- 0.000001
+brn_LOD <-as.data.frame(LOD_equation(brn_df))
+
+#lets now format those LODs into a dataframe for use and add a column header
+names(brn_LOD)[1] <- "brn_LOD"
+```
+
+*serum*
+```{r}
+ser_df <- ctrl_df[grep("S", ctrl_df$batch_id) ,15:17]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+ser_df <- as.data.frame(apply(ser_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+ser_df[is.na(ser_df)] <- 0.000001
+ser_LOD <-as.data.frame(LOD_equation(ser_df))
+
+#lets now format those LODs into a dataframe for use and add a column header
+names(ser_LOD)[1] <- "ser_LOD"
+```
+
+*Liver*
+```{r}
+Liv_df <- ctrl_df[grep("Liv", ctrl_df$batch_id) ,15:17]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+Liv_df <- as.data.frame(apply(Liv_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+Liv_df[is.na(Liv_df)] <- 0.000001
+Liv_LOD <-as.data.frame(LOD_equation(Liv_df))
+
+#lets now format those LODs into a dataframe for use and add a column header
+names(Liv_LOD)[1] <- "liv_LOD"
+```
+
+*Lung*
+```{r}
+Lng_df <- ctrl_df[grep("Lng", ctrl_df$batch_id) ,15:17]
+#depending on the format of columns and cells in spreadsheet this step may be necessary to help R treat your variables appropriately.
+Lng_df <- as.data.frame(apply(Lng_df, 2, as.numeric))
+
+#to treat any NA in levels as a zero (level of PCB is so low its hard to detect)
+Lng_df[is.na(Lng_df)] <- 0.000001
+Lng_LOD <-as.data.frame(LOD_equation(Lng_df))
+
+#lets now format those LODs into a dataframe for use and add a column header
+names(Lng_LOD)[1] <- "lng_LOD"
+```
+
+#Tissue LODs in one data frame#
+```{r}
+
+LOD <- cbind(MDL,brn_LOD,ser_LOD, Liv_LOD, Lng_LOD,brn_LOD_ng,ser_LOD_ng, Liv_LOD_ng, Lng_LOD_ng) #binding all of the LODs together by column
+
+write.table(LOD, file = "SubQ_PCB52_MDL_LOD.csv", row.names=TRUE, col.names=TRUE, sep=",", quote=TRUE) #export a csv of the dataset we have generated
+```
+
+Levels in data set are already tissue adjusted. If you need to adjust for tissue weight that will require an additional step (not yet incorporated here)
+#Replace values below LOD for adipose with Adipose LOD#
+Using the tissue matrix LODs we just generated, we can apply them to their corresponding PCB exposed tissue.
+
+
+```{r}
+inh_df<-m3[!is.na(m3$Exposure),]
+
+```
+inh_df_sham<-inh_df[inh_df$Exposure=='Sham',]
+inh_df<-inh_df[!inh_df$Exposure=='Sham',]
+
+*Brain*
+```{r}
+inh_df[grep("Brn", inh_df$batch_id) ,15:17]<- mapply(
+  function(x, y) {
+    x[x < y] <- NA #tell R that anything below a specific value should be labelled NA#
+    x },
+  inh_df[grep("Brn", inh_df$batch_id) ,15:17], brn_LOD[, "brn_LOD"])
+```
+
+*Serum*
+```{r}
+inh_df[grep("S", inh_df$batch_id) ,15:17]<- mapply(
+  function(x, y) {
+    x[x < y] <- NA #tell R that anything below a specific value should be labelled NA#
+    x },
+  inh_df[grep("S", inh_df$batch_id) ,15:17], ser_LOD[, "ser_LOD"])
+```
+
+*liver*
+```{r}
+inh_df[grep("Liv", inh_df$batch_id) ,15:17]<- mapply(
+  function(x, y) {
+    x[x < y] <- NA #tell R that anything below a specific value should be labelled NA#
+    x },
+  inh_df[grep("Liv", inh_df$batch_id) ,15:17], Liv_LOD[, "liv_LOD"])
+```
+
+
+*Lung*
+```{r}
+inh_df[grep("Lng", inh_df$batch_id) ,15:17]<- mapply(
+  function(x, y) {
+    x[x < y] <- NA #tell R that anything below a specific value should be labelled NA#
+    x },
+  inh_df[grep("Lng", inh_df$batch_id) ,15:17], Lng_LOD[, "lng_LOD"])
+```
+
+
+*Sham after MDL*
+
+inh_df_sham[15:17]<- mapply(
+  function(x, y) {
+    x[x < y] <- NA #tell R that anything below a specific value should be labelled NA#
+    x },
+  inh_df_sham[15:17], MDL[, "MDL_equation(adj_df)"])
+
+
+inh_df<- rbind(inh_df_sham, inh_df)
+
+
+#adjust significant figures and column names#
+Tell R how many significant figures you want in your ng related data. It is best to do this after you have run all LOD calculations
+```{r}
+inh_df[,15:17] <- signif(inh_df[,15:17], digits = 2) #two significant digits
+colnames(inh_df)[15:17]<- c( "PCB 52", "4-OH-PCB 52", "X1-PCB 52") #changing column names for versions better for figures and tables
+```
+
+#splitting the data table into male and female#
+This may be necessary but may also not be relevant for future analysis, I find it is easier to subset now so that I dont have to later when I am further in analysis that I want to conduct but only want one part of my data.
+
+```{r}
+inh_df$Exposure[inh_df$Exposure == "Exp"]<- "Exposed"
+inh_df$Exposure[inh_df$Exposure== "sham"]<- "Sham"
+inh_df$Exposure<-factor(inh_df$Exposure, levels=c("Sham","Exposed"))
+inh_df
+```
+```{r}
+inh_df$batch_id[grep("Lng", inh_df$batch_id)]<- "Lung"
+inh_df$batch_id[grep("Brn", inh_df$batch_id)]<- "Brain"
+inh_df$batch_id[grep("Liv", inh_df$batch_id)]<- "Liver"
+inh_df$batch_id[grep("S", inh_df$batch_id)]<- "Serum"
+```
+
+```{r}
+write.table(inh_df, file = "SQ_PCB52_data.csv", row.names=TRUE, col.names=TRUE, sep=",", quote=TRUE) #export a csv of the dataset we have generated
+```
+
+#OPR calculations
+
+```{r}
+library(vtable)
+m3
+OPR<- m3[grep("bs", m3$`Necropsy ID#`), c(1,7,8,4)]
+OPR
+OPR[,2:3]<-OPR[,2:3]*100
+colnames(OPR)[3]<-"4'OH-159"
+OPR$`Necropsy ID#`<-factor(OPR$`Necropsy ID#`)
+
+#OPR$tissue<-"tissue"
+
+OPR[grep("F", OPR$batch_id) ,4]<- "Feces"
+OPR[grep("A", OPR$batch_id) ,4] <- "Adipose"
+OPR[grep("Liv", OPR$batch_id) ,4] <- "Liver"
+OPR[grep("Lng", OPR$batch_id) ,4] <- "Lung"
+OPR[grep("C", OPR$batch_id) ,4]<- "Cecum"
+OPR[grep("S", OPR$batch_id) ,4]<- "Serum"
+OPR[grep("Brn", OPR$batch_id) ,4]<- "Brain"
+
+
+st(OPR, group = 'Necropsy ID#', group.test = TRUE)
+
+opr_table<- tbl_summary(OPR,
+                 by = tissue,
+                 type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({sd})", "{min}, {max}"),
+    missing = "no"
+  ) %>%
+  modify_header(label ~ "**Recovery Standard**")
+t1 
+
+library(flextable)
+t1 %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "C:/Users/agrebinoski/OneDrive - University of Iowa/SubQ_PCB52/recovery_table.docx") 
+
+```
+
+```{r}
+rcvry<-inh_df[,c(4,7,8)]
+colnames(rcvry)[1]<-"tissue"
+rcvry[,2:3]<-rcvry[,2:3]*100
+colnames(rcvry)[3]<-"4'OH-159"
+```
+
+rcvry[grep("F", rcvry$tissue) ,1]<- "Feces"
+rcvry[grep("A", rcvry$tissue) ,1] <- "Adipose"
+rcvry[grep("Liv", rcvry$tissue) ,1] <- "Liver"
+rcvry[grep("Lng", rcvry$tissue) ,1] <- "Lung"
+rcvry[grep("C", rcvry$tissue) ,1]<- "Cecum"
+
+```{r}
+
+rcvry[grep("Brn", rcvry$tissue) ,1]<- "Brain"
+rcvry[grep("Lng", rcvry$tissue) ,1]<- "Lung"
+rcvry[grep("S", rcvry$tissue) ,1]<- "Serum"
+
+rcvry$tissue<-factor(rcvry$tissue, levels=c("Brain","Lung","Serum"))
+
+```
+
+*Recovery Table*
+```{r}
+t1<- tbl_summary(rcvry,
+                 by = tissue,
+                 type = all_continuous() ~ "continuous2",
+    statistic = all_continuous() ~ c("{mean} ({sd})", "{min}, {max}"),
+    missing = "no"
+  ) %>%
+  modify_header(label ~ "**Recovery Standard**")
+t1 
+
+library(flextable)
+t1 %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "C:/Users/agrebinoski/OneDrive - University of Iowa/SubQ_PCB52/recovery_table.docx") 
+```
+
+#long data for ease in plotting#
+This step is critical for looking an many different metabolites or compounds and putting them into one plot. This is reorganizing columns by taking all columns that are compounds of interest and using the column headers as the values to input into a new column named "metabolite" and the value associated with previous cells as "concentrations". Take a look at the new dataframes to get a better sense of what R is doing. 
+
+
+```{r}
+inh_df$tissue<-1
+
+inh_df[grep("Brain", inh_df$batch_id) ,18]<- "Brain"
+inh_df[grep("S", inh_df$batch_id) ,18]<- "Serum"
+inh_df[grep("Lung", inh_df$batch_id) ,18]<- "Lung"
+
+inh_df$tissue<-factor(inh_df$tissue, levels=c("Brain","Lung","Serum"))
+
+```
+
+
+
+```{r}
+Long_df<- inh_df %>% dplyr::select(15:18 ,Sex, Exposure) %>%
+  pivot_longer(., cols = c(`PCB 52`:`X1-PCB 52`), names_to = "Metabolite", values_to = "Conc")
+
+Long_df$Metabolite<-factor(Long_df$Metabolite, levels=c("PCB 52", "4-OH-PCB 52", "X1-PCB 52"))
+```
+
+
+```{r}
+inh_df$Sex[inh_df$Sex == "M"]<- "Male"
+inh_df$Sex[inh_df$Sex =="F"]<- "Female"
+
+```
+
+```{r}
+m_data<-inh_df[inh_df$Sex == "Male",]
+fm_data<-inh_df[inh_df$Sex == "Female",]
+
+m_data<- m_data[,c(2,15:18)]
+fm_data<- fm_data[,c(2,15:18)]
+```
+
+
+
+```{r}
+M_Table_conc<-m_data %>%
+  tbl_strata(
+    strata = `Exposure`, 
+    ~ .x %>%
+      tbl_summary(by = `tissue`, missing = "no", type = list(c(`PCB 52`,`4-OH-PCB 52`,`X1-PCB 52`) ~ "continuous") ,statistic = list(all_continuous() ~ "{mean} ({sd})")
+                  ) %>%
+  modify_header(label ~ "**PCB or Metabolite**"))
+M_Table_conc
+
+F_Table_conc<-fm_data %>%
+  tbl_strata(
+    strata = `Exposure`, 
+    ~ .x %>%
+      tbl_summary(by = `tissue`, missing = "no", type = list(c(`PCB 52`,`4-OH-PCB 52`, `X1-PCB 52`) ~ "continuous") ,statistic = list(all_continuous() ~ "{mean} ({sd})")
+                  ) %>%
+  modify_header(label ~ "**PCB or Metabolite**"))
+F_Table_conc
+
+library(flextable)
+M_Table_conc %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "C:/Users/agrebinoski/OneDrive - University of Iowa/SubQ_PCB52/M_conc_table.docx") 
+F_Table_conc %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "C:/Users/agrebinoski/OneDrive - University of Iowa/SubQ_PCB52/F_conc_table.docx") 
+
+
+```
+This chunk of code will just adjust the base parameters of our visuals by generating a shortcut. Named theme_PCB.
+```{r}
+theme_PCB <- function(){ 
+    theme_classic() %+replace%    #replace elements we want to change
+    theme(
+      #grid elements
+      axis.ticks = element_blank(),                             #strip axis ticks
+      panel.border = element_rect(colour = "Gray", fill = NA), #add graph border
+      axis.line = element_line(colour = "black"),
+      strip.background = element_blank(),
+      strip.text = element_text(size = 15,
+                                face = 'bold',
+                                vjust = 1),
+      #text elements
+      plot.title = element_text(             #title
+                   size = 24,                #set font size
+                   face = 'bold',            #bold typeface
+                   hjust = 0.5,              #left align
+                   vjust = 2),               #raise slightly
+      
+      plot.subtitle = element_text(          #subtitle
+                   face = 'bold',
+                   size = 20),               #font size
+ 
+      axis.title = element_text(             #axis titles
+                   face = 'bold',
+                   size = 20),               #font size
+      axis.text.x.bottom = element_text(angle =70)
+
+    )
+}
+```
+
+
+```{r}
+tiff(file = "C:/Users/agrebinoski/OneDrive - University of Iowa/SubQ_PCB52/PCB52_plot_20220727.tiff", units="in", width=10, height=5, res=1000)
+
+chart_4 <- ggplot(Long_df, 
+                        aes(x=Metabolite, 
+                            y=log(Conc), 
+                            fill= Exposure)) +
+ geom_boxplot(position = position_dodge(preserve = "single"))+
+ scale_y_continuous(expand = expand_scale(mult=c(0.01,.1)),name = "Log Concentrations (ng/g)") +
+     theme_PCB()+
+     theme(axis.title = element_blank(),
+          axis.ticks.x =element_blank(),
+          axis.text.x = element_blank(),
+          legend.position = )+
+     scale_fill_brewer(palette="Dark2")+ 
+     geom_point(stat= "identity", shape=21, size=1)+
+  facet_grid(Sex~tissue)
+chart_4
+dev.off()
+
+chart_4
+```
+
+```{r}
+
+tiff(file = "C:/Users/agrebinoski/OneDrive - University of Iowa/SubQ_PCB52/PCB52_conc_plot_PCB52.tiff", units="in", width=5, height=7, res=1000)
+
+plot1 <- ggplot(Long_df, aes(x=Exposure, 
+                          y=Conc,
+                          fill= Exposure))+
+  geom_bar(stat = "identity", position = position_dodge())+
+      scale_y_continuous(name = "Concentrations (ng/g)") +
+     scale_x_discrete(name= "")+
+     scale_fill_brewer(palette = "Dark2")+
+     facet_grid(Metabolite~Sex)+
+     theme_PCB()+
+    theme(legend.position = "bottom")+ guides(fill=guide_legend(title="Exposure"))
+plot1
+dev.off()
+plot1
+
+```
+
+```{r}
+
+tiff(file = "C:/Users/agrebinoski/OneDrive - University of Iowa/PCB52_Inhalation/R_out_put/Figures/PCB52_conc_plot_4-oh-PCB52.tiff", units="in", width=7, height=5, res=1000)
+
+plot3 <- chart_5(M2_data)+
+  coord_cartesian(ylim = c(-2,6))
+plot3
+dev.off()
+plot3
+
+```
+
+```{r}
+
+tiff(file = "C:/Users/agrebinoski/OneDrive - University of Iowa/PCB52_Inhalation/R_out_put/Figures/PCB52_conc_plot_X1-PCB52.tiff", units="in", width=7, height=5, res=1000)
+
+plot4 <- chart_5(M3_data)+
+  coord_cartesian(ylim = c(-2,6))
+plot4
+dev.off()
+plot4
+
+```
+
+***Statistics***
+
+```{r}
+data_52<- M1_data%>%
+  pivot_wider(names_sort = TRUE, #helps keep the order of factors
+              names_from = tissue, 
+              values_from = Conc,
+              values_fn = list) %>% 
+    unnest(cols = everything() )
+
+data_4OH52<- M2_data%>%
+  pivot_wider(names_sort = TRUE, #helps keep the order of factors
+              names_from = tissue, 
+              values_from = Conc,
+              values_fn = list) %>% 
+    unnest(cols = everything() )
+
+data_X1<- M3_data%>%
+  pivot_wider(names_sort = TRUE, #helps keep the order of factors
+              names_from = tissue, 
+              values_from = Conc,
+              values_fn = list) %>% 
+    unnest(cols = everything() )
+
+```
+
+```{r}
+data_52$geno <- paste(data_52$exposure_group, data_52$sex, sep="_")
+data_4OH52$geno <- paste(data_4OH52$exposure_group, data_4OH52$sex, sep="_")
+data_X1$geno <- paste(data_X1$exposure_group, data_X1$sex, sep="_")
+```
+
+
+```{r}
+geno<- factor(data_52$geno) #genotype and sex will be the two factors for multiple comparisons
+geno
+```
+
+Levels: High_Female High_Male Low_Female Low_Male
+
+```{r}
+K = rbind(c(-1, 0, 1, 0),
+c(0, 0, -1, 1),
+c(-1, 1 , 0, 0),
+c(0, -1, 0, 1))
+
+#identify the comparison names so we can identify which comparison corresponds with the result listed.
+
+rownames(K) = c("L_F - H_F", "L_M - L_F", "H_M - H_F", 
+"L_M - H_M")
+```
+
+
+I have generated a function to call each tissue individually and make all of the comparsions we want to see
+```{r}
+stats_function<- function(df){
+
+  do_stats<-function (df) { #these are the statistics we want to conduct. Linear model with genotype_sex comparisons
+   y <- as.numeric(df)
+       fit<- lm(y ~ -1 + geno)
+       coef(summary(fit))
+       summary(glht(fit, linfct = K))
+} 
+
+for (i in colnames(df[4:10])) # columns 10:20 contain PCB95 and metabolites we want comparisons for 
+  {
+  print(i) #print the column names before the statistics so we know which compound R is testing
+  try(
+    print(do_stats(df[[i]])))
+}
+}
+
+```
+
+#Stats#
+```{r}
+stats_function(data_52)
+```
+```{r}
+stats_function(data_4OH52)
+```
+```{r}
+stats_function(data_X1)
+```
+
+#Tissue table of adjusted values
+```{r}
+adj_organ<- read.csv("Organ Weights Normalized to Body Weight.csv")
+
+adj_organ$Treatment[adj_organ$Treatment== "PCB52"]<- "Exposed"
+
+adj_organ$Treatment<-factor(adj_organ$Treatment, levels = c("Sham", "Exposed"))
+adj_organ$Treatment
+
+```
+
+```{r}
+
+adj_organ<-adj_organ[,2:11]
+
+```
+
+
+
+```{r}
+org<-adj_organ %>%
+  tbl_strata(
+    strata = `Treatment`, 
+    ~ .x %>%
+      tbl_summary(by = `Sex`, missing = "no", type = list(~ "continuous") ,statistic = list(all_continuous() ~ "{mean} ({sd})")
+                  ) %>%
+  modify_header(label ~ "**Tissue**"))
+org
+
+library(flextable)
+org %>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path = "C:/Users/agrebinoski/OneDrive - University of Iowa/SubQ_PCB52/adj_organ_table.docx") 
+
+```
